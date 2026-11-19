@@ -11,9 +11,19 @@ def action_math(a):
     reference=(price-cash+rp*rights)/(1+bonus+rights)
     if reference<=0:raise DomainError('ACTION','除权参考价不为正')
     return reference,reference/price
-def allocate_cents(amounts):
+def allocate_whole(amounts):
+    # Integer units: floor every row, then hand out the units implied by the
+    # floored total to the largest fractional remainders. The result sums to
+    # floor(total) and is stable for a fixed key order.
+    target=int(sum(amounts.values(),Decimal(0)).to_integral_value(rounding=ROUND_FLOOR))
+    floors={key:int(value.to_integral_value(rounding=ROUND_FLOOR)) for key,value in amounts.items()}
+    order=sorted(amounts,key=lambda key:(-(amounts[key]-floors[key]),key))
+    for key in order[:target-sum(floors.values())]:floors[key]+=1
+    return {key:Decimal(value) for key,value in floors.items()}
+def allocate_cents(amounts,target=None):
     # Aggregate cash is rounded once; rows receive cents by largest remainder.
-    target=int(sum(amounts.values(),Decimal(0)).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)*100)
+    total=sum(amounts.values(),Decimal(0))
+    if target is None:target=int(total.quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)*100)
     floors={key:int((value*100).to_integral_value(rounding=ROUND_FLOOR)) for key,value in amounts.items()}
     order=sorted(amounts,key=lambda key:(-(amounts[key]*100-floors[key]),key))
     for key in order[:target-sum(floors.values())]:floors[key]+=1

@@ -1,8 +1,8 @@
 # 深度登记 证券除权复权与持仓对账
 
 - 规模：中型
-- 使用者与工作流：券商数据校验员，归一公司行动与成交持仓文件，复算除权因子和股数现金。
-- 核心规则：除权参考价=(前收盘-每股现金+配股价×配股比例)/(1+送转比例+配股比例)，按登记日判定权益，零碎股单列。
+- 使用者与工作流：券商数据校验员，归一公司行动与成交持仓文件，复算除权因子和股数现金，并按客户合并后复核发布。
+- 核心规则：除权参考价=(前收盘-每股现金+配股价×配股比例)/(1+送转比例+配股比例)，按登记日判定权益，零碎股单列；客户合并总数与逐账户登记回执分别列示，差异可复核。
 
 ## 功能模块
 
@@ -15,6 +15,7 @@
 | M5 持仓重算 | 运行持仓重算并复核证据 | `POST /api/m5`；`/work/5` | `app/modules/m5_holdings/rules.py` | `tests/test_m5.py` |
 | M6 现金对账 | 运行现金对账并复核证据 | `POST /api/m6`；`/work/6` | `app/modules/m6_cash/rules.py` | `tests/test_m6.py` |
 | M7 修订回放 | 运行修订回放并复核证据 | `POST /api/m7`；`/work/7` | `app/modules/m7_revisions/rules.py` | `tests/test_m7.py` |
+| M8 客户合并 | 复核账户分摊与客户总数并发布 | `POST /api/m8`、`GET /api/publish`；`/work/8` | `app/modules/m8_consolidation/rules.py`、`app/publish.py` | `tests/test_m8.py` |
 
 ## 陷阱登记
 
@@ -28,11 +29,22 @@
 | TRAP-14 | 行动定义冲突 | 静默覆盖或误计 | 显式裁决并保留证据 | `app/modules/m2_mapping/rules.py` | `tests/test_m2.py::test_conflicting_action_removed` |
 | TRAP-24 | 现金尾差 | 静默覆盖或误计 | 显式裁决并保留证据 | `app/modules/m5_holdings/rules.py` | `tests/test_m5.py::test_largest_remainder_conservation` |
 | TRAP-25 | 行动版本选择 | 静默覆盖或误计 | 显式裁决并保留证据 | `app/modules/m2_mapping/rules.py` | `tests/test_m2.py::test_latest_action_chosen` |
+| TRAP-26 | 多账户逐户取整少一股 | 客户合并总数与登记回执差 1 股 | 分列两套口径并分摊尾差 | `app/modules/m8_consolidation/rules.py` | `tests/test_m8.py::test_client_total_uses_combined_holding` |
+| TRAP-27 | 多账户现金分币差 | 客户合计与回执差几分 | 客户级一次取整后按最大余额分摊 | `app/modules/m8_consolidation/rules.py`、`app/domain.py` | `tests/test_m8.py::test_client_cash_residual` |
+| TRAP-28 | 晚到账户归属 | 静默改挂客户或重复计权 | 归属变更阻断发布，须逐账户确认 | `app/publish.py` | `tests/test_m8.py::test_account_moved_to_other_client_is_blocked` |
+| TRAP-29 | 同批重跑 | 重复增加权益 | 台账按批次整表替换并以业务主键去重，同文复用run_id | `app/store.py` | `tests/test_e2e.py::test_rerun_same_batch_does_not_reapply_entitlement` |
+| TRAP-30 | 已发布批次被退回 | 台账指向已退回批次 | 当前已确认批次不可退回，只能由新批次覆盖 | `app/main.py` | `tests/test_e2e.py::test_published_batch_cannot_be_withdrawn` |
 
 ## 对账规则
 
 输入记录 = 采信记录 + 隔离记录 + 相同行重复。重复表头与空行单独记数。业务合计按阶段中的守恒或差值列复核。运行清单有原文SHA256、规则版本与耗时；相同规则版本下同文重复提交复用批次。
 
+客户合并阶段给出三组可复核数字：
+
+1. 账户分摊明细：登记新增股份、分摊新增股份、股份调整、登记分红、分摊分红、现金调整。
+2. 客户合计：客户新增股份、登记新增股份、股份差异、客户分红、登记分红、现金差异。
+3. 发布状态：阻断项、与已确认台账的逐账户差异、客户总数增减。
+
 ## 已知不覆盖
 
-部署为本地单用户工具，不连接外部上游系统。CSV单文件5MB及一万条业务记录上限；不推断未提供的未知数据。
+部署为本地单用户工具，不连接外部上游系统。CSV单文件5MB及一万条业务记录上限；不推断未提供的未知数据。账户与客户的归属只依据输入文件的client/account列，不查询券商客户关系系统。

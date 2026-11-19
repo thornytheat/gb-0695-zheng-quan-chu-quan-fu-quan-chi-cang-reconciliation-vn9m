@@ -7,7 +7,6 @@ def apply(ctx):
         calculations={p['position']['record']:entitlement(p['position'],p['action']) for p in items};cash=allocate_cents({k:v['cash'] for k,v in calculations.items()})
         for item in items:
             p,a=item['position'],item['action'];e=calculations[p['record']]
-            rows.append({'持仓记录':p['record'],'证券':p['canonical'],'快照日':p['event_date'],'除权日':a['ex_date'],'原股份':p['shares'],'新股份':str(e['new_shares']),'零碎股':str(e['fraction']),'分红_CNY':fmt(cash[p['record']],'0.01'),'认配支付_CNY':fmt(e['subscription'],'0.01'),'行动版本':a['version'],'行号':p['行号']})
+            rows.append({'客户':p['client_key'],'账户':p['account_key'],'持仓记录':p['record'],'证券':p['canonical'],'快照日':p['event_date'],'除权日':a['ex_date'],'原股份':p['shares'],'新股份':str(e['new_shares']),'零碎股':str(e['fraction']),'分红_CNY':fmt(cash[p['record']],'0.01'),'认配支付_CNY':fmt(e['subscription'],'0.01'),'行动版本':a['version'],'行号':p['行号']})
     ctx['holdings']=rows
     return {'rows':rows,'metrics':[['重算持仓',len(rows),'条'],['零碎股记录',sum(r['零碎股']!='0' for r in rows),'条'],['现金分红',str(sum((__import__('decimal').Decimal(r['分红_CNY']) for r in rows),__import__('decimal').Decimal(0))),'CNY']]}
-

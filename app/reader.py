@@ -1,7 +1,8 @@
 import csv, io
-from app.config import HEADERS, LIMIT
+from app.config import HEADERS, OPTIONAL_HEADERS, LIMIT
 from app.errors import DomainError
 from app.reasons import isolate
+ALLOWED = set(HEADERS) | set(OPTIONAL_HEADERS)
 def decode(raw):
     for encoding in ('utf-8-sig','gb18030'):
         try: return raw.decode(encoding)
@@ -15,7 +16,8 @@ def read_rows(ctx):
     except csv.Error: raise DomainError('STRUCTURE','表头损坏')
     if head is None: raise DomainError('BLANK','文件仅有空行')
     head=[x.strip() for x in head]
-    if set(head)!=set(HEADERS) or len(head)!=len(HEADERS):
+    # 必填列必须齐全；客户与账户为可选的归属列，可出现在任意位置。
+    if not set(HEADERS).issubset(head) or len(head)!=len(set(head)) or not set(head).issubset(ALLOWED):
         raise DomainError('HEADER','字段缺失或重复')
     rows=[];ctx['input_count']=0;ctx['blank_count']=0;ctx['header_count']=0
     try:
@@ -26,7 +28,8 @@ def read_rows(ctx):
             ctx['input_count']+=1
             if len(cells)!=len(head):
                 isolate(ctx,{'行号':reader.line_num,'原值':'|'.join(cells)},'COLUMNS','列数不符');continue
-            rows.append({**dict(zip(head,[x.strip() for x in cells])), '行号':reader.line_num})
+            row={**{name:'' for name in OPTIONAL_HEADERS},**dict(zip(head,[x.strip() for x in cells])), '行号':reader.line_num}
+            rows.append(row)
     except csv.Error: raise DomainError('STRUCTURE','引号未闭合或记录截断')
     if not rows and not ctx['quarantine']: raise DomainError('HEADER_ONLY' if not ctx['blank_count'] else 'BLANK','文件没有业务记录')
     ctx['rows']=rows

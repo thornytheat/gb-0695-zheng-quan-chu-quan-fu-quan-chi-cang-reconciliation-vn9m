@@ -60,3 +60,68 @@ def test_rule_version_is_part_of_batch_identity(monkeypatch):
     monkeypatch.setattr(manifest,'RULE_VERSION','future-rules')
     second=manifest.make('same content')
     assert first['sha256']==second['sha256'] and first['run_id']!=second['run_id']
+
+def test_eight_pages_and_module_endpoint(client):
+    for n in range(1,9): assert client.get('/work/'+str(n)).status_code==200
+    assert client.post('/api/m8',json={}).get_json()['stage']==8
+    assert client.post('/api/m8',json={}).get_json()['clients']
+
+def test_release_panel_shows_publish_state(client):
+    run=client.post('/api/run',json={}).get_json();ident=run['manifest']['run_id']
+    page=client.get('/work/8?run_id='+ident).data.decode()
+    for text in ('客户权益发布','当前能否发布','客户总数','账户分摊明细','客户合计'):
+        assert text in page
+    # 复核/发布按钮与状态同在发布面板内，页面可直接看到。
+    assert 'data-check="通过"' in page and '待复核' in page
+    state=client.get('/api/publish?run_id='+ident).get_json()
+    assert state['status']=='待复核' and state['client_count']==19
+
+def test_rerun_same_batch_does_not_reapply_entitlement(client):
+    from app.store import confirmed
+    first=client.post('/api/run',json={}).get_json();ident=first['manifest']['run_id']
+    client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过'})
+    baseline=confirmed()
+    for _ in range(3): assert client.post('/api/run',json={}).get_json()['reused'] is True
+    assert confirmed()==baseline
+    assert len(confirmed()['lines'])==19
+
+def test_confirmed_result_is_snapshot_not_rewritten_by_late_batch(client,raw):
+    from app.store import confirmed
+    first=client.post('/api/run',json={'csv':raw}).get_json();ident=first['manifest']['run_id']
+    client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过'});baseline=confirmed()
+    client.post('/api/run',json={'csv':raw+'\n'})
+    client.post('/api/run',json={'csv':raw.replace('LATE,position,000001,,2026-11-18,,,,,,,,100,1,0','LATE,position,000001,,2026-11-18,,,,,,,,80,1,0')})
+    assert confirmed()==baseline and confirmed()['run_id']==ident
+
+def test_review_moves_confirmed_baseline(client,raw):
+    from app.store import confirmed
+    first=client.post('/api/run',json={'csv':raw}).get_json()
+    client.post('/api/review',json={'id':first['manifest']['run_id'],'revision':1,'decision':'通过'})
+    second=client.post('/api/run',json={'csv':raw.replace('LATE,position,000001,,2026-11-18,,,,,,,,100,1,0','LATE,position,000001,,2026-11-18,,,,,,,,80,1,0')}).get_json()
+    assert second['stages']['8']['release']['status']=='待复核'
+    client.post('/api/review',json={'id':second['manifest']['run_id'],'revision':1,'decision':'通过'})
+    assert confirmed()['run_id']==second['manifest']['run_id']
+
+def test_attribution_change_requires_explicit_ack(client):
+    from app.config import MULTI_SAMPLE
+    base=MULTI_SAMPLE.read_text(encoding='utf-8-sig')
+    first=client.post('/api/run',json={'csv':base}).get_json()
+    client.post('/api/review',json={'id':first['manifest']['run_id'],'revision':1,'decision':'通过'})
+    target=[line for line in base.splitlines() if line.startswith('P1002')][0]
+    changed=base.replace(target,target.replace(',C0001,7002',',C0009,7002'))
+    second=client.post('/api/run',json={'csv':changed}).get_json();ident=second['manifest']['run_id']
+    state=client.get('/api/publish?run_id='+ident).get_json()
+    assert state['status']=='不可发布' and state['blockers']==['ATTRIBUTION_CHANGED:7002']
+    assert client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过'}).status_code==409
+    assert client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过','acknowledge':['ATTRIBUTION_CHANGED:9999']}).status_code==422
+    assert client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过','acknowledge':['ATTRIBUTION_CHANGED:7002']}).status_code==200
+    assert client.get('/api/publish?run_id='+ident).get_json()['status']=='已发布'
+
+def test_review_rejects_unknown_batch(client):
+    assert client.post('/api/review',json={'id':'absent','revision':1,'decision':'通过'}).status_code==404
+
+def test_published_batch_cannot_be_withdrawn(client):
+    run=client.post('/api/run',json={}).get_json();ident=run['manifest']['run_id']
+    assert client.post('/api/review',json={'id':ident,'revision':1,'decision':'通过'}).status_code==200
+    assert client.post('/api/review',json={'id':ident,'revision':2,'decision':'退回'}).status_code==409
+    assert client.get('/api/publish?run_id='+ident).get_json()['status']=='已发布'
